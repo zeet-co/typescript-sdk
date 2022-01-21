@@ -6,7 +6,7 @@ import {
   ClaimEligibility,
   NATIVE_TOKEN_ADDRESS,
 } from "../src/index";
-import { appModule, sdk, signers } from "./before.test";
+import { appModule, fastForwardTime, sdk, signers } from "./before.test";
 
 global.fetch = require("node-fetch");
 
@@ -549,6 +549,170 @@ describe("Bundle Drop Module", async () => {
       const { metadata } = await bdModule.getMetadata(false);
       const merkle: { [key: string]: string } = metadata["merkle"];
       assert.lengthOf(Object.keys(merkle), 2);
+    });
+  });
+
+  describe("updating claim conditions on ongoing drops", () => {
+    let module: BundleDropModule;
+
+    let firstSnapshot: string[];
+    let secondSnapshot: string[];
+
+    const updateSnapshot = async (snapshot: string[]) => {
+      await sdk.setProviderOrSigner(adminWallet);
+      const factory = module.getClaimConditionsFactory();
+      await factory
+        .newClaimPhase({
+          startTime: new Date(),
+          maxQuantityPerTransaction: 1,
+        })
+        .setWaitTimeBetweenClaims(ethers.constants.MaxInt256)
+        .setSnapshot(snapshot);
+
+      await module.updateClaimConditions(BigNumber.from("0"), factory);
+    };
+
+    beforeEach(async () => {
+      await sdk.setProviderOrSigner(adminWallet);
+      firstSnapshot = [w1.address, w2.address, w3.address];
+      secondSnapshot = [
+        bobWallet.address,
+        samWallet.address,
+        w1.address,
+        w2.address,
+      ];
+
+      module = await appModule.deployBundleDropModule({
+        name: "test",
+        primarySaleRecipientAddress: bobWallet.address,
+      });
+      await module.lazyMintBatch([
+        {
+          name: "test",
+        },
+      ]);
+
+      await updateSnapshot(firstSnapshot);
+    });
+
+    it("should report the correct claim status for everyone", async () => {
+      for (const address of firstSnapshot) {
+        const reasons = await module.getClaimIneligibilityReasons(
+          "0",
+          1,
+          address,
+        );
+        expect(reasons).that.eql([]);
+      }
+    });
+
+    it("should not allow folks in the first snapshot to claim", async () => {
+      await sdk.setProviderOrSigner(w1);
+      await module.claim("0", 1);
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        firstSnapshot[0],
+      );
+      expect(reasons).that.eql([
+        ClaimEligibility.WaitBeforeNextClaimTransaction,
+      ]);
+    });
+
+    it("should allow the user to update the claim conditions", async () => {
+      await sdk.setProviderOrSigner(adminWallet);
+      const factory = module.getClaimConditionsFactory();
+      await factory
+        .newClaimPhase({
+          startTime: new Date(),
+          maxQuantityPerTransaction: 1,
+        })
+        .setWaitTimeBetweenClaims(ethers.constants.MaxInt256)
+        .setSnapshot(secondSnapshot);
+
+      await module.updateClaimConditions(BigNumber.from("0"), factory);
+    });
+
+    it("should not block someone who holds the token but hasn't claimed yet from claiming", async () => {
+      await sdk.setProviderOrSigner(w1);
+      await module.claim("0", 1);
+      await module.transfer(w2.address, "0", 1);
+
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        w2.address,
+      );
+      expect(reasons).that.eql([]);
+    });
+
+    it("should exclude users from previous snapshots if they've claimed previously and the snapshot was updated", async () => {
+      await sdk.setProviderOrSigner(w1);
+      await module.claim("0", 1);
+
+      await updateSnapshot(secondSnapshot);
+
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        firstSnapshot[0],
+      );
+      expect(reasons).that.eql([
+        ClaimEligibility.WaitBeforeNextClaimTransaction,
+      ]);
+    });
+
+    it("should allow someone in both snapshots to claim if they haven't", async () => {
+      await sdk.setProviderOrSigner(w1);
+      await module.claim("0", 1);
+
+      await updateSnapshot(secondSnapshot);
+
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        firstSnapshot[1],
+      );
+      expect(reasons).that.eql([]);
+    });
+
+    it("should allow new folks in second snapshot to claim", async () => {
+      await sdk.setProviderOrSigner(w1);
+      await module.claim("0", 1);
+
+      await updateSnapshot(secondSnapshot);
+
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        secondSnapshot[0],
+      );
+      expect(reasons).that.eql([]);
+    });
+
+    it("should return the correct error when wallets in the second snapshot try to claim", async () => {
+      await sdk.setProviderOrSigner(adminWallet);
+      const factory = module.getClaimConditionsFactory();
+      await factory
+        .newClaimPhase({
+          startTime: new Date(),
+          maxQuantityPerTransaction: 1,
+        })
+        .setWaitTimeBetweenClaims(ethers.constants.MaxInt256)
+        .setSnapshot(secondSnapshot);
+
+      await module.setClaimCondition(BigNumber.from("0"), factory);
+      await module.updateClaimConditions(BigNumber.from("0"), factory);
+      await sdk.setProviderOrSigner(bobWallet);
+
+      await module.claim("0", 1);
+
+      const reasons = await module.getClaimIneligibilityReasons(
+        "0",
+        1,
+        bobWallet.address,
+      );
+      expect(reasons).that.eql([ClaimEligibility.AlreadyClaimed]);
     });
   });
 });

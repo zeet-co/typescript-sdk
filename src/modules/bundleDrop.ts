@@ -461,6 +461,7 @@ export class BundleDropModule
     for (const key of Object.keys(existingMerkle)) {
       merkleInfo[key] = existingMerkle[key];
     }
+    metadata["merkle"] = merkleInfo;
 
     const encoded = [];
     if (!isMetadataEqual(oldMerkle, metadata["merkle"])) {
@@ -845,12 +846,20 @@ export class BundleDropModule
           timestampForNextClaim,
         )
       ) {
-        const balance = await this.readOnlyContract.balanceOf(
-          addressToCheck,
-          tokenId,
+        const events = await this.readOnlyContract.queryFilter(
+          this.readOnlyContract.filters.ClaimedTokens(
+            null,
+            BigNumber.from(tokenId),
+            addressToCheck,
+          ),
         );
-
-        if (balance.gte(1)) {
+        if (
+          events.length > 0 &&
+          events.some(
+            (e) =>
+              e.args.claimer.toLowerCase() === addressToCheck.toLowerCase(),
+          )
+        ) {
           reasons.push(ClaimEligibility.AlreadyClaimed);
         }
       } else {

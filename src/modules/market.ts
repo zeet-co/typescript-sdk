@@ -18,7 +18,11 @@ import {
   MissingRoleError,
 } from "../common";
 import { InterfaceId_IERC721 } from "../common/contract";
-import { CurrencyValue, getCurrencyValue } from "../common/currency";
+import {
+  CurrencyValue,
+  getCurrencyValue,
+  isNativeToken,
+} from "../common/currency";
 import { invariant } from "../common/invariant";
 import { getMetadataWithoutContract, NFTMetadata } from "../common/nft";
 import { ModuleWithRoles } from "../core/module";
@@ -335,7 +339,7 @@ export class MarketModule extends ModuleWithRoles<Market> {
       const totalPrice = listing.price.mul(BigNumber.from(quantity));
       if (
         listing.currencyContract &&
-        listing.currencyContract !== AddressZero
+        !isNativeToken(listing.currencyContract)
       ) {
         const erc20 = ERC20__factory.connect(
           listing.currencyContract,
